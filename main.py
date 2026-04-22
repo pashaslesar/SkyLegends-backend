@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr
@@ -10,11 +10,12 @@ from datetime import datetime
 
 load_dotenv()
 
-app = FastAPI(title="AeroWash API", version="1.0.0")
+app = FastAPI(title="Sky Legends API", version="1.0.0")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -25,6 +26,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
+
+def require_admin(x_admin_key: str = Header(default=None)):
+    if ADMIN_API_KEY and x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -123,7 +130,7 @@ async def create_order(req: OrderRequest):
     }
 
 
-@app.get("/orders")
+@app.get("/orders", dependencies=[Depends(require_admin)])
 async def list_orders(status: str = None, limit: int = 100, offset: int = 0):
     q = supabase.table("orders").select("*, clients(name,email,phone,company)").order(
         "created_at", desc=True
@@ -134,7 +141,7 @@ async def list_orders(status: str = None, limit: int = 100, offset: int = 0):
     return {"data": res.data, "count": len(res.data)}
 
 
-@app.get("/orders/{order_num}")
+@app.get("/orders/{order_num}", dependencies=[Depends(require_admin)])
 async def get_order(order_num: str):
     res = supabase.table("orders").select("*, clients(*)").eq("order_num", order_num).single().execute()
     if not res.data:
@@ -142,7 +149,7 @@ async def get_order(order_num: str):
     return res.data
 
 
-@app.patch("/orders/{order_num}/status")
+@app.patch("/orders/{order_num}/status", dependencies=[Depends(require_admin)])
 async def update_status(order_num: str, body: StatusUpdate):
     allowed = {"new", "confirmed", "in_progress", "completed", "cancelled"}
     if body.status not in allowed:
@@ -166,13 +173,13 @@ async def download_pdf(order_num: str):
     )
 
 
-@app.get("/clients")
+@app.get("/clients", dependencies=[Depends(require_admin)])
 async def list_clients(limit: int = 100):
     res = supabase.table("clients").select("*, orders(count)").order("created_at", desc=True).limit(limit).execute()
     return {"data": res.data}
 
 
-@app.get("/stats")
+@app.get("/stats", dependencies=[Depends(require_admin)])
 async def get_stats():
     orders = supabase.table("orders").select("total_price,total_area,status").execute().data
     clients = supabase.table("clients").select("id", count="exact").execute()
